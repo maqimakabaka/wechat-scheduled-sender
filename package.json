@@ -1,6 +1,6 @@
 {
   "name": "wechat-scheduled-sender",
-  "version": "1.0.0",
+  "version": "2.0.1",
   "private": true,
   "description": "微信定时群发控制台 - Electron 桌面应用（用户文件全部在安装目录下）",
   "author": "Alanine",

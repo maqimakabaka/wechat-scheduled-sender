@@ -59,13 +59,14 @@ import inbox as inbox_mod  # noqa: E402
 import leads as leads_mod  # noqa: E402
 import media as media_mod  # noqa: E402
 import planner  # noqa: E402
+import remark_send  # noqa: E402
 import report as report_mod  # noqa: E402
 import scheduler  # noqa: E402
 import settings as settings_mod  # noqa: E402
 import targets as targets_mod  # noqa: E402
 import update as update_mod  # noqa: E402
 import wxdir  # noqa: E402
-from sender import SendEngine, find_wechat_window  # noqa: E402
+from sender import SendEngine, find_independent_chat_windows, find_wechat_window  # noqa: E402
 
 ROOT = userdata.data_root()
 DATA_DIR = userdata.sub(userdata.DIR_DATA)
@@ -167,6 +168,123 @@ class Runtime:
 
 
 RT = Runtime()
+
+
+def _launch_send_thread(run, *args) -> bool:
+    def worker():
+        try:
+            run(*args)
+        finally:
+            RT.running = False
+
+    with RT.lock:
+        if RT.thread is not None and RT.thread.is_alive():
+            return False
+        RT.logs = []
+        RT.progress.update({"round": 0, "total_rounds": 0, "sent": 0, "total": 0, "failed": 0})
+        RT.running = True
+        RT.started_at = time.time()
+        RT.thread = threading.Thread(target=worker, daemon=True)
+        try:
+            RT.thread.start()
+        except Exception:
+            RT.running = False
+            raise
+        return True
+
+
+def _remark_preview(account: str, keywords: list[str]) -> tuple[str, list[dict]]:
+    if not isinstance(account, str) or not account:
+        raise ValueError("请选择微信账号")
+    accounts = contacts_mod.list_local_accounts()
+    selected = next((a for a in accounts if a.get("account") == account), None)
+    if selected is None:
+        raise ValueError("所选微信账号不可用，请重新加载联系人")
+    friends = contacts_mod.list_friends(account)
+    matches = remark_send.matches(friends, keywords)
+    account_id = selected.get("wxid") or account
+    if not matches:
+        return account_id, matches
+
+    names: dict[str, set[str]] = {}
+    for contact in [*friends, *contacts_mod.list_groups(account)]:
+        for value in (contact.get("name"), contact.get("nick_name"), contact.get("remark")):
+            if value:
+                names.setdefault(value.strip(), set()).add(contact["username"])
+
+    history = remark_send.attempted(DATA_DIR, account_id)
+    active = selected.get("is_current") and not selected.get("current_uncertain")
+    ambiguous = {m["username"] for m in matches if len(accounts) > 1
+                 or names.get(m["name"]) != {m["username"]}}
+    main = find_wechat_window(restore=False) if ambiguous and active else None
+    windows = find_independent_chat_windows(main, ambiguous) if main else {}
+    for match in matches:
+        username = match["username"]
+        independent = username in ambiguous
+        reason = ""
+        if username in history:
+            reason = "已有备注发送尝试记录"
+        elif not active:
+            reason = "无法确认所选账号已登录"
+        elif independent and username not in windows:
+            reason = "请在微信中单独打开该联系人的聊天窗口，或改用保留关键词的唯一备注"
+        match.update(eligible=not reason, reason=reason, independent=independent)
+    return account_id, matches
+
+
+def _run_remark_send(account: str, selected_account: str, main: int,
+                     targets: list[dict], text: str) -> None:
+    RT.progress.update({"round": 1, "total_rounds": 1, "total": len(targets)})
+    RT.log("INFO", "开始备注关键词发送，目标 %d 位" % len(targets))
+    cfg = schedule_config()
+    failed_in_row = 0
+    main_engine = None
+    for target in targets:
+        if not RT.running:
+            break
+        if cfg["enforce_window"] and not scheduler.in_window(
+                datetime.datetime.now(), cfg["send_window_start"], cfg["send_window_end"]):
+            RT.log("WARN", "已超出发送时段，停止备注关键词发送")
+            break
+        accounts = contacts_mod.list_local_accounts()
+        if find_wechat_window(restore=False) != main or not any(
+                a.get("account") == selected_account and a.get("is_current")
+                and not a.get("current_uncertain") for a in accounts):
+            RT.log("WARN", "微信窗口或登录账号已变化，停止备注关键词发送")
+            break
+        username, name = target["username"], target["name"]
+        independent = target["independent"]
+        try:
+            if independent:
+                window = find_independent_chat_windows(main, {username}).get(username)
+                if not window:
+                    raise RuntimeError("已无法核对独立聊天窗口的身份")
+                engine = SendEngine(hwnd=window, should_stop=lambda: not RT.running,
+                                    independent_username=username)
+            else:
+                if main_engine is None:
+                    main_engine = SendEngine(hwnd=main, should_stop=lambda: not RT.running)
+                engine = main_engine
+            result = engine.send_remark_text(
+                username, name, text, independent,
+                reserve=lambda: remark_send.reserve(DATA_DIR, account, username),
+            )
+        except Exception as exc:
+            result = {"error": str(exc)}
+        if result.get("ok"):
+            RT.progress["sent"] += 1
+            failed_in_row = 0
+            RT.log("OK", "备注关键词已发送 → %s（%s）" % (name, username))
+        else:
+            RT.progress["failed"] += 1
+            failed_in_row += 1
+            RT.log("WARN", "%s（%s）：%s" % (name, username, result.get("error")))
+            if cfg["max_fail_streak"] and failed_in_row >= cfg["max_fail_streak"]:
+                RT.log("WARN", "连续失败达到限制，停止备注关键词发送")
+                break
+        time.sleep(1.2)
+    RT.log("INFO", "备注关键词发送结束。成功 %d / 失败 %d"
+           % (RT.progress["sent"], RT.progress["failed"]))
 
 
 def _safe(name: str) -> str:
@@ -507,12 +625,10 @@ def _retry_run() -> bool:
         "retry": True,
         "start_at": "补发",
     }
-    RT.logs = []
     RT.plan = plan
+    if not _launch_send_thread(_run_plan, plan):
+        return False
     RT.log("INFO", "开始补发 %d 条失败记录" % len(events))
-    th = threading.Thread(target=_run_plan, args=(plan,), daemon=True)
-    RT.thread = th
-    th.start()
     return True
 
 
@@ -563,13 +679,11 @@ def _auto_run(task: dict) -> bool:
         RT.log("WARN", "自动运行：本轮没有要发的内容（%s）" % why)
         return False
 
-    RT.logs = []
     RT.plan = plan
+    if not _launch_send_thread(_run_plan, plan):
+        return False
     RT.log("INFO", "自动运行开始：%d 个事件，覆盖 %d 个目标"
            % (plan["total_messages"], plan["target_count"]))
-    th = threading.Thread(target=_run_plan, args=(plan,), daemon=True)
-    RT.thread = th
-    th.start()
     return True
 
 
@@ -585,8 +699,6 @@ INBOX_POLLER = InboxPoller(DATA_DIR, log=lambda lvl, msg: RT.log(lvl, msg))
 
 
 def _run_plan(plan: dict) -> None:
-    RT.running = True
-    RT.started_at = time.time()
     try:
         # 把「是否已请求停止」透给引擎：一次发送最长几十秒，
         # 只在两条之间判停止会导致「点了停止还在发」（实测停了还在跑 42 秒）。
@@ -1272,6 +1384,43 @@ class Handler(BaseHTTPRequestHandler):
                                          status=body.get("status"))
                 return self._json(r, 200 if r.get("ok") else 500)
 
+            if p in ("/api/remark/preview", "/api/remark/start"):
+                if not isinstance(body, dict):
+                    return self._json({"ok": False, "error": "无效的请求内容"}, 400)
+                try:
+                    keywords = remark_send.parse_keywords(body.get("keywords"))
+                    account, matches = _remark_preview(body.get("account"), keywords)
+                except ValueError as exc:
+                    return self._json({"ok": False, "error": str(exc)}, 400)
+                if p == "/api/remark/preview":
+                    return self._json({"ok": True, "matches": matches})
+
+                usernames = body.get("usernames")
+                if not isinstance(usernames, list) or not usernames or any(
+                        not isinstance(username, str) or not username for username in usernames):
+                    return self._json({"ok": False, "error": "请选择至少一位符合条件的联系人"}, 400)
+                selected_ids = set(usernames)
+                selected = [m for m in matches if m["username"] in selected_ids and m["eligible"]]
+                if len(selected) != len(selected_ids):
+                    return self._json({"ok": False, "error": "联系人条件已变化，请重新预览"}, 409)
+                text = body.get("text")
+                if not isinstance(text, str) or not text.strip():
+                    return self._json({"ok": False, "error": "请填写要发送的文字"}, 400)
+                text = text.replace("\r\n", "\n").strip()
+                guard = guard_mod.check(text)
+                if not guard["ok"]:
+                    return self._json({"ok": False, "error": guard["reason"]}, 400)
+                cap = schedule_config()["run_cap"]
+                if cap and len(selected) > cap:
+                    return self._json({"ok": False, "error": "所选人数超过单次运行上限（%d）" % cap}, 400)
+                main = find_wechat_window(restore=False)
+                if not main:
+                    return self._json({"ok": False, "error": "未找到微信窗口，请先打开已登录的微信"}, 400)
+                if not _launch_send_thread(_run_remark_send, account, body["account"], main,
+                                           selected, text):
+                    return self._json({"ok": False, "error": "任务已在运行中"}, 409)
+                return self._json({"ok": True, "queued": len(selected)})
+
             if p == "/api/start":
                 if RT.running:
                     return self._json({"ok": False, "error": "任务已在运行中"}, 409)
@@ -1280,10 +1429,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"ok": False, "error": "计划为空"}, 400)
                 if not find_wechat_window():
                     return self._json({"ok": False, "error": "未找到微信窗口，请先登录微信"}, 400)
-                RT.logs = []
-                t = threading.Thread(target=_run_plan, args=(plan,), daemon=True)
-                RT.thread = t
-                t.start()
+                if not _launch_send_thread(_run_plan, plan):
+                    return self._json({"ok": False, "error": "任务已在运行中"}, 409)
                 return self._json({"ok": True})
 
             if p == "/api/stop":

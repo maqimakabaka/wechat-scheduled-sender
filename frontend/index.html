@@ -15,8 +15,18 @@
   h1{font-size:23px;margin:0 0 6px;letter-spacing:-.3px}
   .sub{color:var(--ink2);font-size:13px;margin:0}
 
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  .grid{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
+  .module > summary{display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:12px 18px;margin:-12px -18px -10px;border-radius:var(--radius);
+    font-weight:600;letter-spacing:.2px;cursor:pointer;list-style:none}
+  .module > summary::-webkit-details-marker{display:none}
+  .module > summary::after{content:"";width:7px;height:7px;flex:none;
+    margin-right:3px;border-right:2px solid var(--ink2);border-bottom:2px solid var(--ink2);
+    transform:rotate(45deg)}
+  .module[open] > summary{margin-bottom:2px}
+  .module[open] > summary::after{transform:rotate(225deg)}
+  .module > summary:hover{background:#f8f9fc}
+  .module > summary:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
 
   /* 多选下拉（选群/好友） */
   .msel{position:relative}
@@ -33,11 +43,13 @@
   .card.stack{position:relative;z-index:40}
   .msel-panel{position:absolute;z-index:60;left:0;right:0;top:calc(100% + 6px);background:#fff;
     border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 34px rgba(16,24,40,.18);overflow:hidden;
-    opacity:0;transform:translateY(-6px) scale(.99);pointer-events:none;
+    visibility:hidden;opacity:0;transform:translateY(-6px) scale(.99);pointer-events:none;
     transition:opacity .22s var(--ease),transform .22s var(--ease)}
-  .msel-panel.open{opacity:1;transform:none;pointer-events:auto}
-  .msel-tools{display:flex;gap:8px;padding:8px;border-bottom:1px solid var(--line);background:#fbfcfe}
-  .msel-search{flex:1;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font:inherit;outline:none;min-width:0}
+  .msel-panel.open{visibility:visible;opacity:1;transform:none;pointer-events:auto}
+  .msel-tools{padding:8px;border-bottom:1px solid var(--line);background:#fbfcfe}
+  .msel-search{width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font:inherit;outline:none}
+  .msel-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .msel-actions .btn{padding:6px 9px;font-size:12px}
   .msel-list{max-height:290px;overflow:auto;padding:6px}
   .msel-group{font-size:11px;color:var(--ink2);padding:8px 8px 4px;font-weight:600;letter-spacing:.4px}
   .msel-item{display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:8px;cursor:pointer;
@@ -66,8 +78,9 @@
   .chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 9px;border-radius:20px;
     background:#f2f4f9;border:1px solid var(--line);color:var(--ink);animation:fade .3s var(--ease) both}
   .chip.g{background:var(--blue-soft);border-color:#d8e3ff}
-  .chip .x{cursor:pointer;color:#8b93a7;font-weight:700;line-height:1}
+  .chip .x{border:0;background:none;padding:0 2px;cursor:pointer;color:#737c90;font-weight:700;line-height:1}
   .chip .x:hover{color:var(--red)}
+  .chips-more{align-self:center;font-size:12px;color:var(--ink2)}
 
   /* 运行日志 */
   .logs{margin-top:8px;height:250px;overflow:auto;background:#0f1116;border-radius:11px;padding:11px 12px;
@@ -105,8 +118,8 @@
 
   <div class="grid">
 
-    <section class="card stack rise" style="animation-delay:.05s">
-      <h2>1 · 账号与目标</h2>
+    <details class="card module stack rise" style="animation-delay:.05s" open>
+      <summary>1 · 账号与目标</summary>
       <p class="hint">自动读取本机所有已登录过的微信账号</p>
 
       <label for="accountSel">微信账号</label>
@@ -116,15 +129,20 @@
 
       <label>发送目标（群聊 / 好友分组显示，可多选）</label>
       <div class="msel" id="msel">
-        <button class="msel-btn" id="mselBtn" type="button">
+        <button class="msel-btn" id="mselBtn" type="button" aria-controls="mselPanel" aria-expanded="false">
           <span class="ph" id="mselText">点击选择群聊或好友…</span>
-          <span class="caret">▾</span>
+          <span class="caret" aria-hidden="true">▾</span>
         </button>
         <div class="msel-panel" id="mselPanel">
           <div class="msel-tools">
             <input class="msel-search" id="mselSearch" placeholder="搜索名称…" aria-label="搜索群聊或好友名称">
-            <button class="btn" id="selAllGroups" type="button">全选群</button>
-            <button class="btn" id="selNone" type="button">清空</button>
+            <div class="msel-actions">
+              <button class="btn" id="selAll" type="button" disabled title="选择当前账号的全部群聊和好友">全选</button>
+              <button class="btn" id="selAllGroups" type="button" disabled>全选群聊</button>
+              <button class="btn" id="selAllFriends" type="button" disabled>全选好友</button>
+              <button class="btn" id="selMatches" type="button" disabled>全选搜索结果</button>
+              <button class="btn" id="selNone" type="button" disabled>清空已选</button>
+            </div>
           </div>
           <div class="msel-list" id="mselList"><div class="msel-empty">读取中…</div></div>
         </div>
@@ -137,10 +155,27 @@
         <div class="metric"><div class="k">已选目标</div><div class="v" id="mSelected">0</div></div>
         <div class="metric"><div class="k">消息池</div><div class="v" id="mPool">–</div></div>
       </div>
-    </section>
+    </details>
 
-    <section class="card rise" style="animation-delay:.1s">
-      <h2>2 · 消息内容</h2>
+    <details class="card module rise">
+      <summary>1.5 · 按好友备注发送</summary>
+      <p class="hint">从上方选定账号的通讯录读取备注。按独立词匹配，例如 BB 匹配「BB CCCC」，AA 不匹配「AABB CCCC」。</p>
+      <label for="remarkKeywords">关键词</label>
+      <textarea id="remarkKeywords" rows="2" placeholder="每行一个，例如 BB" maxlength="1000"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" id="remarkPreview" type="button">预览匹配</button>
+        <button class="btn" id="remarkSelectAll" type="button" disabled>全选可发送</button>
+        <span class="pill" id="remarkCount" aria-live="polite">请先预览</span>
+      </div>
+      <div id="remarkMatches" class="msel-list" aria-label="匹配的好友" hidden></div>
+      <label for="remarkText">发送内容</label>
+      <textarea id="remarkText" rows="3" placeholder="输入要发送的文字"></textarea>
+      <p class="hint" style="margin-top:8px">此功能需要手动确认。同一账号对同一好友最多尝试一次，发送结果不明时也会保留记录。</p>
+      <button class="btn primary" id="remarkStart" type="button" disabled>确认发送给所选好友</button>
+    </details>
+
+    <details class="card module rise" style="animation-delay:.1s" open>
+      <summary>2 · 消息内容</summary>
       <p class="hint">选择解析方式：<b>每行一条</b>适合一句句话；<b>多行消息</b>适合带换行的清单/通知</p>
 
       <div class="seg" id="modeSeg">
@@ -160,10 +195,10 @@
         <span class="pill" id="msgMode" style="color:#2563eb">–</span>
       </div>
       <div class="note" id="modeTip" style="display:none"></div>
-    </section>
+    </details>
 
-    <section class="card rise" style="animation-delay:.125s">
-      <h2>2.5 · 素材（图片 / 文件）</h2>
+    <details class="card module rise" style="animation-delay:.125s">
+      <summary>2.5 · 素材（图片 / 文件）</summary>
       <p class="hint">不填就只发文字。素材通过<b>剪贴板粘贴</b>送进微信输入框——
         微信工具栏没有「发送图片」入口，这是唯一不依赖鼠标坐标的路径。</p>
 
@@ -222,10 +257,10 @@
         <span class="pill" id="mediaCount">–</span>
       </div>
       <div class="note" id="mediaTip" style="display:none"></div>
-    </section>
+    </details>
 
-    <section class="card rise" style="animation-delay:.14s">
-      <h2>2.7 · 内容编排（定时投放）</h2>
+    <details class="card module rise" style="animation-delay:.14s">
+      <summary>2.7 · 内容编排（定时投放）</summary>
       <p class="hint">按运营方案：<b>每天 1 条</b>固定时间发「当日引导语 + 原文案」，
         原文案<b>一字不改</b>；文案发出 <b>30 分钟</b>后补发资料钩子，
         钩子只在<b>周二/周四/周六</b>投，避免刷屏被踢。</p>
@@ -263,10 +298,10 @@
         <div class="preview" id="campPreview" style="display:none;margin-top:12px"></div>
         <div class="note" id="campTip" style="display:none"></div>
       </div>
-    </section>
+    </details>
 
-    <section class="card rise" style="animation-delay:.15s">
-      <h2>3 · 计划参数</h2>
+    <details class="card module rise" style="animation-delay:.15s" open>
+      <summary>3 · 计划参数</summary>
       <p class="hint">随机种子固定为当天日期，同一天的计划可复现。
         默认 <b>1 轮</b>，每轮条数填 <b>0</b> 表示「跟随已选目标数」——每个群/好友恰好发 1 条。
         间隔是<b>相邻两条消息之间</b>的随机等待（均约 5 分钟，30 个目标 ≈ 2.5 小时）</p>
@@ -293,10 +328,10 @@
         <span class="pill" id="planSum">–</span>
       </div>
       <div class="preview" id="planPreview" style="display:none"></div>
-    </section>
+    </details>
 
-    <section class="card rise" style="animation-delay:.2s">
-      <h2>4 · 执行</h2>
+    <details class="card module rise" style="animation-delay:.2s" open>
+      <summary>4 · 执行</summary>
       <p class="hint">开始前请确认微信已登录且窗口可恢复</p>
       <div class="row">
         <button class="btn primary" id="startBtn" type="button">开始发送</button>
@@ -325,10 +360,10 @@
         <span class="pill" id="failMsg">–</span>
       </div>
       <div class="preview" id="failBox" style="display:none;margin-top:10px"></div>
-    </section>
+    </details>
 
-    <section class="card rise full" style="animation-delay:.23s">
-      <h2>5 · 线索与周报</h2>
+    <details class="card module rise" style="animation-delay:.23s">
+      <summary>5 · 线索与周报</summary>
       <p class="hint">方案的重心不在「发」而在「收」。这里轮询本地数据库找出
         <b>主动私聊你的群友</b>（无需 hook），登记成线索并跟踪跟进状态。</p>
 
@@ -365,10 +400,10 @@
         <span class="pill" id="targetMsg">–</span>
       </div>
       <div class="preview" id="targetBox" style="display:none"></div>
-    </section>
+    </details>
 
-    <section class="card rise full" style="animation-delay:.26s">
-      <h2>6 · 设置与运维</h2>
+    <details class="card module rise" style="animation-delay:.26s">
+      <summary>6 · 设置与运维</summary>
       <p class="hint">全部设置已拆成独立页面，避免主界面越滚越长。
         下面几个是最常用的状态入口，改参数请点「打开设置页」。</p>
 
@@ -431,13 +466,13 @@
           <span class="pill" id="updProg"></span>
         </div>
       </div>
-    </section>
+    </details>
 
-    <section class="card rise full" style="animation-delay:.28s">
-      <h2>运行日志</h2>
+    <details class="card module rise" style="animation-delay:.28s">
+      <summary>运行日志</summary>
       <p class="hint" id="shotHint">截图保存在 shots/&lt;日期&gt;/ 目录下</p>
       <div class="logs" id="logs"><div class="l"><span class="t">等待开始…</span></div></div>
-    </section>
+    </details>
 
   </div>
 </div>
@@ -479,10 +514,22 @@ async function loadAccounts(){
 }
 
 /* ---------- 联系人 ---------- */
+let contactRequest = null;
+
 async function loadContacts(account){
+  contactRequest?.abort();
+  const request = new AbortController();
+  contactRequest = request;
+  state.groups = [];
+  state.friends = [];
+  $('mGroups').textContent = '–';
+  $('mFriends').textContent = '–';
+  $('accWarn').style.display = 'none';
+  renderList();
   $('mselList').innerHTML = '<div class="msel-empty">读取中…</div>';
   try{
-    const d = await api('/api/contacts?account='+encodeURIComponent(account||''));
+    const d = await api('/api/contacts?account='+encodeURIComponent(account||''), {signal:request.signal});
+    if(request.signal.aborted) return;
     state.groups = d.groups || [];
     state.friends = d.friends || [];
     $('mGroups').textContent = d.group_count ?? state.groups.length;
@@ -499,24 +546,36 @@ async function loadContacts(account){
     renderList();
     renderChips();
   }catch(e){
-    $('mselList').innerHTML = '<div class="msel-empty">读取失败：'+e.message+'</div>';
+    if(request.signal.aborted) return;
+    $('mselList').innerHTML = '<div class="msel-empty">读取失败：'+escapeHtml(e.message)+'</div>';
     toast('读取联系人失败：'+e.message);
   }
 }
 
+function contactMatches(){
+  const keyword = $('mselSearch').value.trim().toLowerCase();
+  if(!keyword) return {keyword, groups:state.groups, friends:state.friends};
+  const match = x => (x.name||'').toLowerCase().includes(keyword) || (x.username||'').toLowerCase().includes(keyword);
+  return {keyword, groups:state.groups.filter(match), friends:state.friends.filter(match)};
+}
+
 function renderList(){
-  const kw = ($('mselSearch').value || '').trim().toLowerCase();
-  const match = x => !kw || (x.name||'').toLowerCase().includes(kw) || (x.username||'').toLowerCase().includes(kw);
-  const gs = state.groups.filter(match);
+  const {keyword, groups:gs, friends:allFs} = contactMatches();
+  const count = gs.length + allFs.length;
+  $('selAll').disabled = state.groups.length + state.friends.length === 0;
+  $('selAllGroups').disabled = state.groups.length === 0;
+  $('selAllFriends').disabled = state.friends.length === 0;
+  $('selMatches').disabled = !keyword || count === 0;
+  $('selMatches').textContent = keyword ? `全选搜索结果（${count}）` : '全选搜索结果';
+
   // 好友可能上万：无搜索词时默认不渲染，避免 DOM 膨胀；输入关键词后再显示
-  const allFs = state.friends.filter(match);
-  const fs = kw ? allFs.slice(0, 300) : [];
+  const fs = keyword ? allFs.slice(0, 300) : [];
   let html = '';
   if(gs.length){
     html += '<div class="msel-group">群聊 · '+gs.length+'</div>';
     html += gs.map(g=>itemHtml(g,'group')).join('');
   }
-  if(kw){
+  if(keyword){
     if(fs.length){
       const more = allFs.length - fs.length;
       html += '<div class="msel-group">好友 · '+allFs.length
@@ -528,14 +587,6 @@ function renderList(){
   }
   if(!html) html = '<div class="msel-empty">没有匹配项</div>';
   $('mselList').innerHTML = html;
-  $('mselList').querySelectorAll('input[type=checkbox]').forEach(cb=>{
-    cb.addEventListener('change', ()=>{
-      const key = cb.dataset.key;
-      const obj = [...state.groups, ...state.friends].find(x=>keyOf(x)===key);
-      if(cb.checked) state.selected.set(key, obj); else state.selected.delete(key);
-      renderChips();
-    });
-  });
 }
 function keyOf(x){ return x.kind+'::'+x.username; }
 function itemHtml(x, kind){
@@ -545,8 +596,15 @@ function itemHtml(x, kind){
     ? `<span class="tag g">群 ${x.member_count||0}</span>`
     : `<span class="tag">好友</span>`;
   const nm = escapeHtml(x.name || x.username);
-  return `<label class="msel-item"><input type="checkbox" data-key="${key}" ${on}>
+  return `<label class="msel-item"><input type="checkbox" data-kind="${kind}" data-key="${escapeHtml(key)}" ${on}>
     <span class="nm">${nm}</span>${tag}</label>`;
+}
+
+function selectContacts(groups, friends){
+  for(const group of groups) state.selected.set(keyOf(group), group);
+  for(const friend of friends) state.selected.set(keyOf(friend), friend);
+  renderChips();
+  renderList();
 }
 
 function renderChips(){
@@ -554,15 +612,16 @@ function renderChips(){
   const arr = [...state.selected.values()];
   $('mSelected').textContent = arr.length;
   $('mselText').textContent = arr.length ? `已选 ${arr.length} 个目标` : '点击选择群聊或好友…';
-  if(!arr.length){ chips.innerHTML=''; return; }
-  chips.innerHTML = arr.map(x=>{
-    const k = keyOf(x);
-    return `<span class="chip ${x.kind==='group'?'g':''}">${escapeHtml(x.name||x.username)}
-      <span class="x" data-key="${k}">×</span></span>`;
-  }).join('');
-  chips.querySelectorAll('.x').forEach(el=>{
-    el.addEventListener('click', ()=>{ state.selected.delete(el.dataset.key); renderChips(); renderList(); });
+  $('selNone').disabled = arr.length === 0;
+  const visible = arr.slice(0, 24);
+  const more = arr.length - visible.length;
+  const tags = visible.map(x=>{
+    const name = escapeHtml(x.name||x.username);
+    return `<span class="chip ${x.kind==='group'?'g':''}">${name}
+      <button class="x" type="button" data-key="${escapeHtml(keyOf(x))}" aria-label="取消选择 ${name}">×</button></span>`;
   });
+  if(more) tags.push(`<span class="chips-more">另有 ${more} 个已选，搜索名称可取消选择</span>`);
+  chips.innerHTML = tags.join('');
 }
 
 /* ---------- 消息池 ---------- */
@@ -1529,6 +1588,7 @@ async function stop(){
 }
 
 function startPolling(){
+  $('logs').closest('details').open = true;
   if(state.polling) return;
   state.polling = setInterval(pollStatus, 1500);
   pollStatus();
@@ -1569,21 +1629,47 @@ async function checkWechat(){
 }
 
 /* ---------- 事件绑定 ---------- */
-$('mselBtn').addEventListener('click', ()=>{
-  const p = $('mselPanel'), b = $('mselBtn');
-  p.classList.toggle('open'); b.classList.toggle('open');
-  if(p.classList.contains('open')) $('mselSearch').focus();
-});
+function setContactPickerOpen(open){
+  $('mselPanel').classList.toggle('open', open);
+  $('mselBtn').classList.toggle('open', open);
+  $('mselBtn').setAttribute('aria-expanded', String(open));
+  if(open) $('mselSearch').focus();
+}
+$('mselBtn').addEventListener('click', ()=>setContactPickerOpen(!$('mselPanel').classList.contains('open')));
 document.addEventListener('click', e=>{
-  if(!$('msel').contains(e.target)){
-    $('mselPanel').classList.remove('open'); $('mselBtn').classList.remove('open');
+  if(!$('msel').contains(e.target)) setContactPickerOpen(false);
+});
+$('msel').addEventListener('keydown', e=>{
+  if(e.key === 'Escape' && $('mselPanel').classList.contains('open')){
+    setContactPickerOpen(false);
+    $('mselBtn').focus();
   }
 });
 $('mselSearch').addEventListener('input', renderList);
+$('mselList').addEventListener('change', e=>{
+  const cb = e.target;
+  if(!cb.matches('input[data-key]')) return;
+  const key = cb.dataset.key;
+  const contacts = cb.dataset.kind === 'group' ? state.groups : state.friends;
+  const contact = contacts.find(x=>keyOf(x)===key);
+  if(!contact) return;
+  if(cb.checked) state.selected.set(key, contact); else state.selected.delete(key);
+  renderChips();
+});
+$('chips').addEventListener('click', e=>{
+  const button = e.target.closest('button[data-key]');
+  if(!button) return;
+  state.selected.delete(button.dataset.key);
+  renderChips();
+  renderList();
+});
 $('selNone').addEventListener('click', ()=>{ state.selected.clear(); renderChips(); renderList(); });
-$('selAllGroups').addEventListener('click', ()=>{
-  state.groups.forEach(g=>state.selected.set(keyOf(g), g));
-  renderChips(); renderList();
+$('selAll').addEventListener('click', ()=>selectContacts(state.groups, state.friends));
+$('selAllGroups').addEventListener('click', ()=>selectContacts(state.groups, []));
+$('selAllFriends').addEventListener('click', ()=>selectContacts([], state.friends));
+$('selMatches').addEventListener('click', ()=>{
+  const {keyword, groups, friends} = contactMatches();
+  if(keyword) selectContacts(groups, friends);
 });
 $('accountSel').addEventListener('change', e=>{
   state.selected.clear(); renderChips();
@@ -1733,5 +1819,6 @@ async function loadPaths(){
   setInterval(()=>{ if(!state.polling) pollStatus(); }, 5000);
 })();
 </script>
+<script src="remark.js"></script>
 </body>
 </html>

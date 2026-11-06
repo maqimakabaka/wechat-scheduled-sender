@@ -143,6 +143,29 @@ def find_wechat_window(restore: bool = True) -> Optional[int]:
     return max(found, key=lambda x: x[1])[0] if found else None
 
 
+def find_independent_chat_windows(main_hwnd: int, usernames: set[str]) -> dict[str, int]:
+    """仅识别微信主进程内、带原生会话 ID 的独立聊天窗口。"""
+    init_com()
+    try:
+        process_id = auto.ControlFromHandle(main_hwnd).ProcessId
+        windows = auto.GetRootControl().GetChildren()
+    except Exception:
+        return {}
+    found = {}
+    prefix = "ChatSingleWindow"
+    for window in windows:
+        try:
+            if window.ProcessId != process_id or window.ClassName != "mmui::ChatSingleWindow":
+                continue
+            aid = window.AutomationId or ""
+            username = aid.removeprefix(prefix)
+            if aid.startswith(prefix) and username in usernames and window.NativeWindowHandle:
+                found[username] = window.NativeWindowHandle
+        except Exception:
+            continue
+    return found
+
+
 def ensure_window_visible(hwnd: int) -> None:
     if win32gui is None:
         return
@@ -386,7 +409,8 @@ class SendEngine:
                 return True
         return False
 
-    def __init__(self, hwnd: Optional[int] = None, should_stop=None):
+    def __init__(self, hwnd: Optional[int] = None, should_stop=None,
+                 independent_username: Optional[str] = None):
         # 必须先在当前线程初始化 COM，否则后台线程拿不到控件树
         init_com()
         self.hwnd = hwnd or find_wechat_window()
@@ -400,7 +424,17 @@ class SendEngine:
         # 取消回调：一次发送最长可能几十秒，不能只在「两条之间」判停止，
         # 必须能在发送过程内部被叫停（否则点了停止还会继续发下一条）。
         self.should_stop = should_stop or (lambda: False)
-        self._ensure_uia()
+        if independent_username is None:
+            self._ensure_uia()
+        else:
+            self.root = auto.ControlFromHandle(self.hwnd)
+            if self.root is None or not self._is_independent_chat(independent_username) \
+                    or self._input_field() is None:
+                raise RuntimeError("无法核对独立聊天窗口或其输入框")
+
+    def _is_independent_chat(self, username: str) -> bool:
+        return (self.root.ClassName == "mmui::ChatSingleWindow"
+                and self.root.AutomationId == "ChatSingleWindow" + username)
 
     def cancelled(self) -> bool:
         try:
@@ -671,7 +705,7 @@ class SendEngine:
         return False
 
     def open_chat(self, target: str, display: Optional[str] = None,
-                  timeout: float = 12.0) -> bool:
+                  timeout: float = 12.0, exact: bool = False) -> bool:
         """打开会话。
 
         **只用显示名搜索，绝不用 wxid**：微信搜索框不认 wxid，
@@ -688,7 +722,7 @@ class SendEngine:
             return False
 
         # 只有 wxid / 群 id、没有显示名时，无法在会话列表里按名字找
-        if kw.endswith("@chatroom") or kw.startswith(("wxid_", "gh_")):
+        if not exact and (kw.endswith("@chatroom") or kw.startswith(("wxid_", "gh_"))):
             self.last_open_error = "只给了 id（%s），没有可用显示名" % kw
             return False
 
@@ -697,14 +731,15 @@ class SendEngine:
             return False
 
         # 已经就在这个会话里就别再点了（再点反而切不过去，见 _already_in_chat）
-        if self._already_in_chat(kw, display):
+        already_open = self.current_chat_name() == kw if exact else self._already_in_chat(kw, display)
+        if already_open:
             self.last_open_error = None
             return True
 
         # 1) 会话列表里直接命中（唯一可靠路径，见下方说明）
-        clicked = self._click_session_item(kw)
+        clicked = self._click_session_item(kw, exact=exact)
         if clicked:
-            if self._verify_chat(kw, display, timeout):
+            if self._verify_chat(kw, display, timeout, exact=exact):
                 return True
             self.last_open_error = "点中了「%s」，但会话没有切换过去" % kw
             return False
@@ -780,7 +815,8 @@ class SendEngine:
             pass
         return True
 
-    def _click_session_item(self, target: str, max_scroll: int = 30) -> bool:
+    def _click_session_item(self, target: str, max_scroll: int = 30,
+                            exact: bool = False) -> bool:
         """在会话列表里找目标并点开。
 
         会话列表只渲染可见的 9 行（虚拟滚动），目标基本都在可见区之外，
@@ -819,8 +855,8 @@ class SendEngine:
                 try:
                     aid = it.AutomationId or ""
                     name = (it.Name or "").split("\n")[0].strip()
-                    hit = (aid == "session_item_%s" % target or name == target)
-                    if not hit and want and len(want) >= 4:
+                    hit = name == target or (not exact and aid == "session_item_%s" % target)
+                    if not hit and not exact and want and len(want) >= 4:
                         hit = normalize_name(name) == want
                     if not hit:
                         continue
@@ -846,7 +882,8 @@ class SendEngine:
             % (max_scroll, scanned, target))
         return False
 
-    def _verify_chat(self, kw: str, display: Optional[str], timeout: float = 12.0) -> bool:
+    def _verify_chat(self, kw: str, display: Optional[str], timeout: float = 12.0,
+                     exact: bool = False) -> bool:
         """校验当前会话是否为目标（防止重名发错）。
 
         搜索关键词往往是「去掉符号后的短片段」（例如用「代博会浦飞出海」去找
@@ -859,6 +896,11 @@ class SendEngine:
         deadline = time.time() + timeout
         while time.time() < deadline:
             cur = self.current_chat_name()
+            if exact:
+                if cur == kw:
+                    return True
+                time.sleep(0.4)
+                continue
             if cur:
                 for n in names:
                     if n in cur or cur in n:
@@ -1108,6 +1150,60 @@ class SendEngine:
         # 清掉剪贴板，避免下一条误粘贴同一张图
         CB.clear()
         return True
+
+    def send_remark_text(self, username: str, display: str, text: str,
+                         independent: bool, reserve) -> Dict[str, Any]:
+        """备注发送只点击一次。发送前复核会话，保留已有草稿。"""
+        def is_target() -> bool:
+            if independent:
+                return self._is_independent_chat(username)
+            return self.root.ClassName == "mmui::MainWindow" and \
+                self.current_chat_name() == display
+
+        if not independent:
+            if self.root.ClassName != "mmui::MainWindow":
+                return {"error": "无法核对微信主窗口"}
+            if not self.open_chat(display, exact=True):
+                return {"error": self.last_open_error or "无法准确打开联系人会话"}
+        if self.cancelled() or not is_target():
+            return {"error": "取消或无法核对会话身份"}
+        field = self._input_field()
+        if field is None:
+            return {"error": "找不到会话输入框"}
+        value = field.GetValuePattern()
+        if value.Value:
+            return {"error": "会话中已有草稿，已跳过"}
+
+        attempted = False
+        try:
+            value.SetValue(text)
+            time.sleep(0.6)
+            if self._send_button() is None or value.Value.replace("\r\n", "\n") != text \
+                    or self.cancelled() or not is_target():
+                return {"error": "发送前核对失败，已跳过"}
+            if not reserve():
+                return {"error": "该联系人已有备注发送尝试记录"}
+            button = self._send_button()
+            if button is None or value.Value.replace("\r\n", "\n") != text \
+                    or self.cancelled() or not is_target():
+                return {"error": "发送前会话已变更或任务已停止"}
+            attempted = True
+            button.Click()
+            deadline = time.monotonic() + 4
+            while time.monotonic() < deadline and not self.cancelled():
+                if not is_target():
+                    break
+                if self.input_is_empty():
+                    return {"ok": True}
+                time.sleep(0.4)
+            return {"error": "已尝试发送，结果待确认；不会自动重试"}
+        finally:
+            if not attempted:
+                try:
+                    if is_target() and value.Value.replace("\r\n", "\n") == text:
+                        value.SetValue("")
+                except Exception:
+                    pass
 
     def send_to(self, target: str, text: str, display: Optional[str] = None,
                 username: Optional[str] = None,
